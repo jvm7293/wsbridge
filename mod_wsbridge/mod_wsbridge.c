@@ -108,23 +108,17 @@ static int running = 1;
 struct Queue {
 	switch_queue_t *queue;
 	switch_mutex_t *mutex;
-	unsigned int count;
-	unsigned int size;
 };
 
 void Queue_create(struct Queue *q, unsigned int capacity, switch_memory_pool_t *memory_pool) {
-	q->count = 0;
-	q->size = capacity;
-	switch_queue_create(&q->queue, q->size, memory_pool);
+	switch_queue_create(&q->queue, capacity, memory_pool);
 	switch_mutex_init(&q->mutex, SWITCH_MUTEX_NESTED, memory_pool);
 }
 
 switch_status_t Queue_push(struct Queue *q, void *data) {
 	switch_status_t rv = SWITCH_STATUS_FALSE;
 	switch_mutex_lock(q->mutex);
-	if ((q->count < q->size) && ((rv = switch_queue_trypush(q->queue, data)) == SWITCH_STATUS_SUCCESS)) {
-		q->count++;
-	}
+	rv = switch_queue_trypush(q->queue, data);
 	switch_mutex_unlock(q->mutex);
 	return rv;
 }
@@ -133,9 +127,7 @@ switch_status_t Queue_pop(struct Queue *q, void **data) {
 	switch_status_t rv = SWITCH_STATUS_FALSE;
 	*data = NULL;
 	switch_mutex_lock(q->mutex);
-	if ((q->count > 0) && ((rv = switch_queue_trypop(q->queue, data)) == SWITCH_STATUS_SUCCESS)) {
-		q->count--;
-	}
+	rv = switch_queue_trypop(q->queue, data);
 	switch_mutex_unlock(q->mutex);
 	return rv;
 }
@@ -210,7 +202,6 @@ struct private_object {
 	switch_queue_t *dtmf_queue;
 	switch_mutex_t *dtmf_mutex;
 	struct Queue eventQueue;
-	struct Queue *myq;
 	unsigned int ws_counter_read; /*stats*/
 	unsigned int rtp_counter_write; /*stats*/
 	unsigned int ws_counter_write; /*stats*/
@@ -794,18 +785,11 @@ wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 
 		{
 			char* event_message = NULL;
-			void* pop;
-			if (Queue_pop(&tech_pvt->eventQueue, &pop) == SWITCH_STATUS_SUCCESS) {
-				event_message = (char *) pop;
-			}
-			// parse json
-			if (event_message) {
+			if (Queue_pop(&tech_pvt->eventQueue, (void*)&event_message) == SWITCH_STATUS_SUCCESS) {
 				cJSON *json_message;
 
-				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Before parsing json\n");
 				json_message = cJSON_Parse(event_message);
-				if (json_message) {					
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "Parsed json\n");
+				if (json_message) {
 					// control json event
 					on_event(tech_pvt, json_message);
 					// send json
@@ -813,9 +797,8 @@ wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 					send_bugfree_json_message(wsi, json_message);
 				}
 				cJSON_Delete(json_message);
+				switch_safe_free(event_message);
 			}
-			switch_safe_free(pop);
-			// everything has been dequeued. 
 		}
 
 		switch_mutex_lock(tech_pvt->write_mutex);
@@ -963,11 +946,9 @@ cJSON* get_ws_headers(switch_channel_t *channel) {
 char* parse_event(char* event_message) {
 	char* parsed_event_message = NULL;
 	if (!zstr(event_message)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_DEBUG,"parsin message\n");
 		switch_url_decode((char *)event_message);
 		wsbridge_str_remove_quotes(event_message);
 		if (strlen(event_message) < EVENT_MESSAGE_MAX_SIZE) {
-			switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_DEBUG,"copyying\n");
 			parsed_event_message = (char*)calloc(EVENT_MESSAGE_MAX_SIZE, sizeof(char));
 			switch_assert(parsed_event_message != NULL);
 			wsbridge_strncpy_null_term(parsed_event_message, event_message, EVENT_MESSAGE_MAX_SIZE);
@@ -975,15 +956,6 @@ char* parse_event(char* event_message) {
 	}
 
 	return parsed_event_message;
-}
-
-void add_event_to_queue(private_t *tech_pvt, char* parsed_event_message) {
-	if ((Queue_push(&tech_pvt->eventQueue, parsed_event_message)) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_DEBUG,"error pushing queue\n");
-		free(parsed_event_message);
-		return;
-	}
-	switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_DEBUG,"pushed in queue\n");
 }
 
 /*
@@ -1024,28 +996,38 @@ static switch_status_t channel_on_init(switch_core_session_t *session)
 
 	{
 		/***** TEST CODE *****/
-
+#if 1
+		struct Queue *queue = &tech_pvt->eventQueue;
+#else
+		struct Queue eventQueue;
+		struct Queue *queue = &eventQueue;
+		Queue_create(queue, 10, switch_core_session_get_pool(tech_pvt->session));
+#endif
 		// start with empty queue
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "count = [%d] size = [%d]\n",
-						  tech_pvt->eventQueue.count,
-						  switch_queue_size(tech_pvt->eventQueue.queue));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
 
-		// push elements on the queue
-		Queue_push(&tech_pvt->eventQueue, strdup("event1"));
-		Queue_push(&tech_pvt->eventQueue, strdup("event2"));
-		Queue_push(&tech_pvt->eventQueue, strdup("event3"));
-		Queue_push(&tech_pvt->eventQueue, strdup("event4"));
-		Queue_push(&tech_pvt->eventQueue, strdup("event5"));
+		{
+			// fill up the queue
+			int i=0;
+			while (TRUE) {
+				char *data = (char*) calloc(20,sizeof(char));
+				sprintf (data, "x_data_%d", i++);
+				if (Queue_push(queue, data) == SWITCH_STATUS_SUCCESS) {
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "pushed = [%s]\n", (const char*)data);
+					continue;
+				}
+				switch_safe_free(data);
+				break;
+			}
+		}
 
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "count = [%d] size = [%d]\n",
-						  tech_pvt->eventQueue.count,
-						  switch_queue_size(tech_pvt->eventQueue.queue));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
 
 		{
 			// drain the queue
-			void* data;
-			while (1) {
-				if (Queue_pop(&tech_pvt->eventQueue, &data) == SWITCH_STATUS_SUCCESS) {
+			char* data;
+			while (TRUE) {
+				if (Queue_pop(queue, (void*)&data) == SWITCH_STATUS_SUCCESS) {
 					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "popped = [%s]\n", (const char*)data);
 					switch_safe_free(data);
 					continue;
@@ -1055,9 +1037,7 @@ static switch_status_t channel_on_init(switch_core_session_t *session)
 		}
 
 		// queue is empty
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "count = [%d] size = [%d]\n",
-						  tech_pvt->eventQueue.count,
-						  switch_queue_size(tech_pvt->eventQueue.queue));
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
 	}
 
 	return SWITCH_STATUS_SUCCESS;
@@ -1501,7 +1481,12 @@ static switch_status_t channel_receive_message(switch_core_session_t *session, s
 			parsed_event_message = parse_event(event_message);
 
 			if (parsed_event_message) {
-				add_event_to_queue(tech_pvt, parsed_event_message);
+				if ((Queue_push(&tech_pvt->eventQueue, parsed_event_message)) != SWITCH_STATUS_SUCCESS) {
+					if (globals.debug) {
+						switch_log_printf(SWITCH_CHANNEL_LOG,SWITCH_LOG_DEBUG,"Could not push event to queue\n");
+					}
+					free(parsed_event_message);
+				}
 			}
 		}
 		break;
