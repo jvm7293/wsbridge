@@ -985,52 +985,6 @@ static switch_status_t channel_on_init(switch_core_session_t *session)
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "WSBridge: number of current calls: %d\n", globals.calls);
 
-	{
-		/***** TEST CODE *****/
-#if 1
-		struct Queue *queue = &tech_pvt->eventQueue;
-#else
-		struct Queue eventQueue;
-		struct Queue *queue = &eventQueue;
-		Queue_create(queue, 10, switch_core_session_get_pool(tech_pvt->session));
-#endif
-		// start with empty queue
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
-
-		{
-			// fill up the queue
-			int i=0;
-			while (TRUE) {
-				char *data = (char*) calloc(20,sizeof(char));
-				sprintf (data, "x_data_%d", i++);
-				if (Queue_push(queue, data) == SWITCH_STATUS_SUCCESS) {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "pushed = [%s]\n", (const char*)data);
-					continue;
-				}
-				switch_safe_free(data);
-				break;
-			}
-		}
-
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
-
-		{
-			// drain the queue
-			char* data;
-			while (TRUE) {
-				if (Queue_pop(queue, (void*)&data) == SWITCH_STATUS_SUCCESS) {
-					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "popped = [%s]\n", (const char*)data);
-					switch_safe_free(data);
-					continue;
-				}
-				break;
-			}
-		}
-
-		// queue is empty
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "size = [%d]\n", switch_queue_size(queue->queue));
-	}
-
 	return SWITCH_STATUS_SUCCESS;
 }
 
