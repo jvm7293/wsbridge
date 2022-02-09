@@ -784,11 +784,11 @@ wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 		switch_mutex_unlock(tech_pvt->dtmf_mutex);
 
 		{
-			char* event_message = NULL;
-			if (Queue_pop(&tech_pvt->eventQueue, (void*)&event_message) == SWITCH_STATUS_SUCCESS) {
+			void* pop;
+			if (Queue_pop(&tech_pvt->eventQueue, &pop) == SWITCH_STATUS_SUCCESS) {
 				cJSON *json_message;
 
-				json_message = cJSON_Parse(event_message);
+				json_message = cJSON_Parse((char *)pop);
 				if (json_message) {
 					// control json event
 					on_event(tech_pvt, json_message);
@@ -797,7 +797,7 @@ wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 					send_bugfree_json_message(wsi, json_message);
 				}
 				cJSON_Delete(json_message);
-				switch_safe_free(event_message);
+				switch_safe_free(pop);
 			}
 		}
 
